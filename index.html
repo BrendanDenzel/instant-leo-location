@@ -55,7 +55,8 @@ button{font:inherit;color:inherit;border:none;background:none;cursor:pointer}
 /* settings */
 .scrim{position:fixed;inset:0;z-index:11;display:none}
 .scrim.open{display:block}
-.settings{position:fixed;top:68px;right:16px;z-index:13;width:290px;border-radius:20px;padding:18px;opacity:0;transform:translateY(-8px) scale(.96);transform-origin:top right;pointer-events:none;transition:opacity .25s var(--ease),transform .35s var(--ease)}
+.settings{position:fixed;top:68px;right:16px;z-index:13;width:290px;border-radius:20px;padding:18px;opacity:0;transform:translateY(-8px) scale(.96);transform-origin:top right;pointer-events:none;transition:opacity .25s var(--ease),transform .35s var(--ease);max-height:calc(100dvh - 84px);overflow-y:auto;scrollbar-width:none}
+.settings::-webkit-scrollbar{display:none}
 .settings.open{opacity:1;transform:none;pointer-events:auto}
 .settings h3{font-size:13px;font-weight:600;margin-bottom:14px;letter-spacing:-.01em}
 .setting{margin-bottom:14px}
@@ -67,6 +68,20 @@ button{font:inherit;color:inherit;border:none;background:none;cursor:pointer}
 .seg button{position:relative;z-index:1;padding:7px 0;font-size:12.5px;font-weight:500;color:var(--muted);border-radius:9px;transition:color .25s}
 .seg button.active{color:var(--text)}
 .note{font-size:11px;color:var(--muted);line-height:1.5;margin-top:10px}
+
+/* layer toggles */
+.layers-title{margin:18px 0 2px!important}
+.tog{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--line);cursor:pointer;user-select:none}
+.layers-title + .tog{border-top:none}
+.tog span{display:block;font-size:13px;font-weight:500}
+.tog small{display:block;font-size:11px;color:var(--muted);margin-top:1px}
+.tog input{display:none}
+.sw{position:relative;flex-shrink:0;width:40px;height:23px;border-radius:999px;background:var(--raised);border:1px solid var(--line);transition:background .35s var(--ease),border-color .35s}
+.sw::after{content:'';position:absolute;top:2px;left:2px;width:17px;height:17px;border-radius:50%;background:var(--surface-solid);box-shadow:0 1px 4px rgba(0,0,0,.3);transition:transform .4s var(--ease),background .3s}
+.tog input:checked + .sw{background:var(--accent);border-color:transparent}
+.tog input:checked + .sw::after{transform:translateX(17px);background:#fff}
+.tog:active .sw::after{width:21px}
+.tog input:checked:active + .sw::after{transform:translateX(13px)}
 
 /* card */
 .card{position:fixed;z-index:10;left:16px;bottom:16px;width:352px;border-radius:24px;padding:18px;animation:riseIn .8s var(--ease) .15s both}
@@ -130,7 +145,9 @@ button{font:inherit;color:inherit;border:none;background:none;cursor:pointer}
 .pin{width:36px;height:46px;cursor:grab;filter:drop-shadow(0 6px 8px rgba(0,0,0,.3));animation:pinDrop .65s var(--ease) both;transform-origin:50% 100%}
 .pin:active{cursor:grabbing}
 .pin svg{width:100%;height:100%}
-.pin .p-fill{fill:var(--prop)}
+.pin .p-fill{fill:var(--accent)}
+.pin.red{width:30px;height:39px;animation-delay:.1s}
+.pin.red .p-fill{fill:var(--prop)}
 @keyframes pinDrop{0%{transform:translateY(-40px) scale(.7);opacity:0}55%{transform:translateY(0) scale(1.08,.92);opacity:1}75%{transform:translateY(-6px) scale(.98,1.03)}100%{transform:none}}
 .dot{position:relative;width:20px;height:20px;pointer-events:none}
 .dot::before{content:'';position:absolute;inset:-12px;border-radius:50%;background:rgba(66,133,244,.28);animation:pulse 2.4s ease-out infinite}
@@ -191,6 +208,9 @@ button{font:inherit;color:inherit;border:none;background:none;cursor:pointer}
     </div>
   </div>
   <p class="note">“Device” follows your system setting and updates automatically when it changes.</p>
+
+  <h3 class="layers-title">Layers</h3>
+  <label class="tog"><div><span>Satellite</span><small>Aerial imagery with road &amp; place labels</small></div><input type="checkbox" data-layer="sat"><i class="sw"></i></label>
 </div>
 
 <div class="card glass" id="card">
@@ -230,13 +250,28 @@ button{font:inherit;color:inherit;border:none;background:none;cursor:pointer}
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script>
 const $ = id => document.getElementById(id);
-const PROTOMAPS_KEY = 'e0590e11b7479b37';
-// Protomaps keys are domain-locked. If the key is rejected (e.g. on 127.0.0.1:5500),
-// the map automatically falls back to CARTO's free light/dark styles so it still works.
-let provider = 'protomaps';
-const styleUrl = t => provider === 'protomaps'
-  ? `https://api.protomaps.com/styles/v5/${t}/en.json?key=${PROTOMAPS_KEY}`
-  : `https://basemaps.cartocdn.com/gl/${t === 'dark' ? 'dark-matter' : 'positron'}-gl-style/style.json`;
+
+/* ───────── Map style: OpenStreetMap (light) / CARTO dark (OSM data, dark theme) ───────── */
+const rasterStyle = t => `https://basemaps.cartocdn.com/gl/${t === 'dark' ? 'dark-matter' : 'voyager'}-gl-style/style.json`;
+const unusedRasterStyle = t => ({
+  version: 8,
+  sources: {
+    base: t === 'dark'
+      ? {
+          type: 'raster',
+          tiles: ['https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'],
+          tileSize: 256, maxzoom: 19,
+          attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions" target="_blank">CARTO</a>'
+        }
+      : {
+          type: 'raster',
+          tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+          tileSize: 256, maxzoom: 19,
+          attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors'
+        }
+  },
+  layers: [{ id: 'base', type: 'raster', source: 'base' }]
+});
 
 /* ───────── Theme: site + map, each Device / Light / Dark ───────── */
 const mq = matchMedia('(prefers-color-scheme: dark)');
@@ -252,7 +287,7 @@ function applySite() {
 let mapTheme = resolve(prefs.map);
 function applyMap() {
   const t = resolve(prefs.map);
-  if (typeof map !== 'undefined' && t !== mapTheme) { mapTheme = t; map.setStyle(styleUrl(t)); }
+  if (typeof map !== 'undefined' && t !== mapTheme) { mapTheme = t; map.setStyle(rasterStyle(t)); }
 }
 function refreshSegs() {
   document.querySelectorAll('.seg').forEach(seg => {
@@ -285,19 +320,11 @@ $('scrim').onclick = () => setSettings(false);
 /* ───────── Map ───────── */
 const map = new maplibregl.Map({
   container: 'map',
-  style: styleUrl(mapTheme),
+  style: rasterStyle(mapTheme),
   center: [-78.8, 43.0], zoom: 12,
   attributionControl: { compact: true }
 });
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
-
-map.on('error', e => {
-  if (provider === 'protomaps' && !e.sourceId && !map.isStyleLoaded()) {
-    provider = 'carto';
-    map.setStyle(styleUrl(mapTheme));
-    console.warn('Protomaps style blocked for this origin — using CARTO fallback. Add this origin to your Protomaps key to use Protomaps locally.');
-  }
-});
 
 new ResizeObserver(() => {
   document.documentElement.style.setProperty('--card-h', ($('card').offsetHeight + 10) + 'px');
@@ -357,7 +384,7 @@ function setLoading(id, cardId) {
    2. Work out which side of the road the pin's building is on (cross product vs. nearest road segment).
    3. Pick the closest address on the SAME street that is on the OTHER side.
    4. If OSM has no address data over there, probe straight across the road with a reverse lookup. */
-const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
 async function overpass(lat, lon, token) {
   const q = `[out:json][timeout:20];
 way(around:70,${lat},${lon})["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"]["name"];
@@ -369,7 +396,12 @@ out center;`;
   for (const url of OVERPASS) {
     if (token !== lookupId) return null;
     try {
-      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(q) });
+      const r = await fetch(url, {
+        method: 'POST',
+        signal: AbortSignal.timeout(20000),
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'data=' + encodeURIComponent(q)
+      });
       if (!r.ok) continue;
       return (await r.json()).elements || [];
     } catch {}
@@ -457,6 +489,7 @@ async function lookup(lat, lng) {
   const base = await reverse(lat, lng, token);
   if (token !== lookupId) return;
   setAddr('myAddr', 'myCard', base && base.text, true);
+  if (base) setPropPin(base.lat, base.lon);   // red pin on the property this address belongs to
   await findOpposite(lat, lng, base, token);
 }
 
@@ -473,7 +506,6 @@ function ensurePropLayers() {           // re-run after every style change (ligh
     if (!map.getLayer(id + '-line')) map.addLayer({ id: id + '-line', type: 'line', source: id, paint: { 'line-color': PROP_COLOR[k], 'line-width': 2.5 } });
   }
 }
-map.on('style.load', ensurePropLayers);
 
 function setProp(k, ring) {
   propGeo[k] = ring
@@ -482,7 +514,19 @@ function setProp(k, ring) {
   const s = map.getSource('prop-' + k);
   if (s) s.setData(propGeo[k]);
 }
-function clearProps() { setProp('pin', null); setProp('opp', null); }
+// red pin = the property the address was pulled from (not draggable)
+let propPin = null;
+function setPropPin(lat, lon) {
+  if (lat == null || isNaN(lat) || isNaN(lon)) return;
+  if (propPin) { propPin.setLngLat([lon, lat]); return; }
+  const el = makePinEl('red');
+  el.style.pointerEvents = 'none';
+  propPin = new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat([lon, lat]).addTo(map);
+}
+function clearProps() {
+  if (propPin) { propPin.remove(); propPin = null; }
+  setProp('pin', null); setProp('opp', null);
+}
 function pointInRing(pt, ring) {
   let inside = false;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -506,6 +550,47 @@ function buildingAt(els, la, lo, kx, ky) {
   return near ? near.ring : null;
 }
 
+/* ───────── Layers: satellite ───────── */
+const layers = Object.assign(
+  { sat: false },
+  (() => {
+    try { return JSON.parse(localStorage.getItem('locator-layers-v4') || '{}'); }
+    catch { return {}; }
+  })()
+);
+
+// Esri World Imagery + reference label layers
+function addSat() {
+  const esri = n => `https://server.arcgisonline.com/ArcGIS/rest/services/${n}/MapServer/tile/{z}/{y}/{x}`;
+  map.addSource('sat-img', { type: 'raster', tiles: [esri('World_Imagery')], tileSize: 256, maxzoom: 19, attribution: 'Imagery © Esri, Maxar, Earthstar Geographics' });
+  map.addSource('sat-roads', { type: 'raster', tiles: [esri('Reference/World_Transportation')], tileSize: 256, maxzoom: 19 });
+  map.addSource('sat-places', { type: 'raster', tiles: [esri('Reference/World_Boundaries_and_Places')], tileSize: 256, maxzoom: 19 });
+  map.addLayer({ id: 'sat-img', type: 'raster', source: 'sat-img', paint: { 'raster-fade-duration': 400 } });
+  map.addLayer({ id: 'sat-roads', type: 'raster', source: 'sat-roads' });
+  map.addLayer({ id: 'sat-places', type: 'raster', source: 'sat-places' });
+}
+
+// Re-adds everything in the right order (imagery → property outlines). Runs after every style change.
+function rebuildOverlays() {
+  for (const k of ['pin', 'opp']) ['-fill', '-line'].forEach(s => { if (map.getLayer('prop-' + k + s)) map.removeLayer('prop-' + k + s); });
+  ['sat-places', 'sat-roads', 'sat-img'].forEach(id => { if (map.getLayer(id)) map.removeLayer(id); });
+  ['sat-places', 'sat-roads', 'sat-img'].forEach(id => { if (map.getSource(id)) map.removeSource(id); });
+  if (layers.sat) addSat();
+  ensurePropLayers();
+}
+
+map.on('style.load', rebuildOverlays);
+
+function setLayer(k, on) {
+  layers[k] = on;
+  try { localStorage.setItem('locator-layers-v4', JSON.stringify(layers)); } catch {}
+  if (k === 'sat') { try { rebuildOverlays(); } catch {} }
+}
+document.querySelectorAll('[data-layer]').forEach(inp => {
+  inp.checked = !!layers[inp.dataset.layer];
+  inp.addEventListener('change', () => setLayer(inp.dataset.layer, inp.checked));
+});
+
 /* ───────── UI state ───────── */
 function showCoords(lat, lng, acc) {
   [['latVal', lat], ['lonVal', lng]].forEach(([id, v]) => {
@@ -516,9 +601,10 @@ function showCoords(lat, lng, acc) {
 
 let pin = null, gpsDot = null;
 
-function makePinEl() {
+function makePinEl(cls = '') {
   const el = document.createElement('div');
-  el.innerHTML = `<div class="pin"><svg viewBox="0 0 36 46"><path class="p-fill" d="M18 0C8.06 0 0 8.06 0 18c0 12.6 18 28 18 28s18-15.4 18-28C36 8.06 27.94 0 18 0z"/><circle cx="18" cy="18" r="6.5" fill="#fff"/></svg></div>`;
+  el.style.zIndex = cls ? 1 : 2;           // blue (yours) always sits above red (property)
+  el.innerHTML = `<div class="pin ${cls}"><svg viewBox="0 0 36 46"><path class="p-fill" d="M18 0C8.06 0 0 8.06 0 18c0 12.6 18 28 18 28s18-15.4 18-28C36 8.06 27.94 0 18 0z"/><circle cx="18" cy="18" r="6.5" fill="#fff"/></svg></div>`;
   el.addEventListener('click', e => e.stopPropagation());
   return el;
 }

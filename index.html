@@ -225,11 +225,11 @@ button{font:inherit;color:inherit;border:none;background:none;cursor:pointer}
   </div>
 
   <div class="addr" id="myCard">
-    <div class="addr-body"><small>Address</small><p class="empty" id="myAddr">Tap the map or mark your location</p></div>
+    <div class="addr-body"><small id="myTitle">Address</small><p class="empty" id="myAddr">Tap the map or mark your location</p></div>
     <button class="copy" data-copy="myAddr" aria-label="Copy address"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15V5a2 2 0 012-2h10"/></svg></button>
   </div>
   <div class="addr opp" id="oppCard">
-    <div class="addr-body"><small>Opposite side of road</small><p class="empty" id="oppAddr">Calculated once a pin is placed</p></div>
+    <div class="addr-body"><small id="oppTitle">Opposite side of road</small><p class="empty" id="oppAddr">Calculated once a pin is placed</p></div>
     <button class="copy" data-copy="oppAddr" aria-label="Copy address"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15V5a2 2 0 012-2h10"/></svg></button>
   </div>
 
@@ -353,8 +353,8 @@ function nominatim(url, token) {
   chain = p.catch(() => {});
   return p.catch(() => null);
 }
-async function reverse(lat, lng, token) {
-  const d = await nominatim(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&addressdetails=1&accept-language=en`, token);
+async function reverse(lat, lng, token, zoom = 18) {
+  const d = await nominatim(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&addressdetails=1&accept-language=en&zoom=${zoom}&polygon_geojson=1`, token);
   if (!d || !d.address) return null;
   const a = d.address;
   const num = a.house_number || '';
@@ -365,7 +365,7 @@ async function reverse(lat, lng, token) {
   if (road) text = (num ? num + ' ' : '') + road + tail;
   else text = (d.display_name || '').split(',').slice(0, 4).join(',').trim();
   // lat/lon = where the matched building actually sits (used to decide which side of the road it's on)
-  return text ? { text, road, num, tail, lat: parseFloat(d.lat), lon: parseFloat(d.lon) } : null;
+  return text ? { text, road, num, tail, lat: parseFloat(d.lat), lon: parseFloat(d.lon), geo: d.geojson } : null;
 }
 
 function setAddr(id, cardId, text, live) {
@@ -393,18 +393,23 @@ way(around:120,${lat},${lon})["building"];
 out geom;
 nwr(around:110,${lat},${lon})["addr:housenumber"]["addr:street"];
 out center;`;
-  for (const url of OVERPASS) {
-    if (token !== lookupId) return null;
-    try {
-      const r = await fetch(url, {
-        method: 'POST',
-        signal: AbortSignal.timeout(20000),
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'data=' + encodeURIComponent(q)
-      });
-      if (!r.ok) continue;
-      return (await r.json()).elements || [];
-    } catch {}
+  for (let round = 0; round < 3; round++) {
+    for (const url of OVERPASS) {
+      if (token !== lookupId) return null;
+      try {
+        const r = await fetch(url, {
+          method: 'POST',
+          signal: AbortSignal.timeout(20000),
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'data=' + encodeURIComponent(q)
+        });
+        if (r.ok) return (await r.json()).elements || [];
+        console.warn('Overpass', url, r.status);
+      } catch (err) {
+        console.warn('Overpass failed:', url);
+      }
+    }
+    await sleep(1500);
   }
   return null;
 }
@@ -420,6 +425,10 @@ function nearestSeg(pt, lines) {
     if (!best || dist < best.dist) best = { dist, dx, dy, cx, cy, len: Math.sqrt(l2), side: Math.sign(dx * (pt[1] - a[1]) - dy * (pt[0] - a[0])) };
   }
   return best;
+}
+
+function sideName(ox, oy, dx, dy) {
+  return Math.abs(dx) >= Math.abs(dy) ? (oy >= 0 ? 'North' : 'South') : (ox >= 0 ? 'East' : 'West');
 }
 
 async function findOpposite(lat, lng, base, token) {
@@ -447,6 +456,10 @@ async function findOpposite(lat, lng, base, token) {
   const lines = roads.map(r => r.geometry.map(g => xy(g.lat, g.lon)));
   const hs = nearestSeg([0, 0], lines);
   const baseSide = hs.side || 1;
+  const sd = sideName(-hs.cx, -hs.cy, hs.dx, hs.dy);
+  const od = { North: 'South', South: 'North', East: 'West', West: 'East' }[sd];
+  $('myTitle').textContent = `Address · ${sd} side`;
+  $('oppTitle').textContent = `Opposite side of road · ${od} side`;
   const bn = parseInt(base.num);
 
   let best = null;
@@ -482,15 +495,57 @@ async function findOpposite(lat, lng, base, token) {
   else fail('No address found across the road');
 }
 
+const ringOf = g => !g ? null : g.type === 'Polygon' ? g.coordinates[0] : g.type === 'MultiPolygon' ? g.coordinates[0][0] : null;
+const linesOf = g => !g ? [] : g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : [];
+
+async function findOppositeNominatim(lat, lng, base, token) {
+  const fail = msg => { setAddr('oppAddr', 'oppCard', null); $('oppAddr').textContent = msg; };
+  if (!base || !base.road) return fail('No road found for this pin');
+
+  const hLat = isNaN(base.lat) ? lat : base.lat, hLon = isNaN(base.lon) ? lng : base.lon;
+  const kx = 111320 * Math.cos(hLat * Math.PI / 180), ky = 111320;
+  const xy = (la, lo) => [(lo - hLon) * kx, (la - hLat) * ky];
+
+  setProp('pin', ringOf(base.geo));
+
+  const rd = await reverse(hLat, hLon, token, 16);
+  if (token !== lookupId) return;
+  const lines = rd ? linesOf(rd.geo).map(l => l.map(p => xy(p[1], p[0]))) : [];
+  if (!lines.length) return fail('Road geometry not found');
+
+  const hs = nearestSeg([0, 0], lines);
+  const baseSide = hs.side || 1;
+  const sd = sideName(-hs.cx, -hs.cy, hs.dx, hs.dy);
+  const od = { North: 'South', South: 'North', East: 'West', West: 'East' }[sd];
+  $('myTitle').textContent = `Address · ${sd} side of road`;
+  $('oppTitle').textContent = `Opposite side · ${od} side of road`;
+
+  const left = [-hs.dy / hs.len, hs.dx / hs.len];
+  const dir = [-left[0] * baseSide, -left[1] * baseSide];
+  let weak = null;
+  for (const d of [Math.max(hs.dist, 25), Math.max(hs.dist, 25) + 18]) {
+    const px = hs.cx + dir[0] * d, py = hs.cy + dir[1] * d;
+    const a = await reverse(hLat + py / ky, hLon + px / kx, token);
+    if (token !== lookupId) return;
+    if (!a || a.text === base.text) continue;
+    if (a.road === base.road) { setAddr('oppAddr', 'oppCard', a.text, true); setProp('opp', ringOf(a.geo)); return; }
+    if (!weak) weak = a;
+  }
+  if (weak) { setAddr('oppAddr', 'oppCard', weak.text, true); setProp('opp', ringOf(weak.geo)); }
+  else fail('No address found across the road');
+}
+
 async function lookup(lat, lng) {
   const token = ++lookupId;
   clearProps();
+  $('myTitle').textContent = 'Address';
+  $('oppTitle').textContent = 'Opposite side of road';
   setLoading('myAddr', 'myCard'); setLoading('oppAddr', 'oppCard');
   const base = await reverse(lat, lng, token);
   if (token !== lookupId) return;
   setAddr('myAddr', 'myCard', base && base.text, true);
   if (base) setPropPin(base.lat, base.lon);   // red pin on the property this address belongs to
-  await findOpposite(lat, lng, base, token);
+  await findOppositeNominatim(lat, lng, base, token);
 }
 
 /* ───────── Property highlight (red = pin's property, amber = opposite side) ───────── */
@@ -700,6 +755,7 @@ $('btnClear').onclick = () => {
   $('myAddr').className = 'empty'; $('myAddr').textContent = 'Tap the map or mark your location';
   $('oppAddr').className = 'empty'; $('oppAddr').textContent = 'Calculated once a pin is placed';
   $('myCard').classList.remove('live'); $('oppCard').classList.remove('live');
+  $('myTitle').textContent = 'Address'; $('oppTitle').textContent = 'Opposite side of road';
   setGps(false); hideHelp(); toast('Cleared');
 };
 

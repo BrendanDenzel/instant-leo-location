@@ -173,6 +173,28 @@ button{font:inherit;color:inherit;border:none;background:none;cursor:pointer}
   .title{left:10px;top:12px}.gear{right:10px;top:12px}
   .maplibregl-ctrl-top-right{top:62px}
 }
+.grab{display:none;position:absolute;top:0;left:0;right:0;height:24px}
+.grab::after{content:'';position:absolute;top:8px;left:50%;width:38px;height:4px;margin-left:-19px;border-radius:4px;background:var(--muted);opacity:.45}
+@media(max-width:640px){
+  .grab{display:block}
+  .card{padding:22px 12px 12px;max-height:62dvh;overflow-y:auto;scrollbar-width:none;border-radius:20px}
+  .card::-webkit-scrollbar{display:none}
+  .card-head{margin-bottom:8px}
+  .coords{gap:6px;margin-bottom:8px}
+  .coord{padding:7px 10px}
+  .coord span{font-size:13px}
+  .addr{padding:8px 10px;margin-bottom:6px}
+  .addr-body p{font-size:13px}
+  .btn-primary{padding:11px;font-size:14px;margin-top:2px}
+  .row{margin-top:6px}
+  .btn-sec{padding:9px}
+  .card{animation-fill-mode:backwards;transition:transform .5s var(--ease)}
+  .coords,.row{overflow:hidden;max-height:90px;transition:max-height .45s var(--ease),opacity .3s,margin .45s var(--ease)}
+  .card.collapsed .coords,.card.collapsed .row{max-height:0;opacity:0;margin-top:0;margin-bottom:0}
+  .card.mini{transform:translateY(calc(100% - 30px))}
+  .card.mini .grab{height:30px}
+  .card.mini > *:not(.grab){pointer-events:none}
+}
 @media(prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 </style>
 </head>
@@ -214,6 +236,7 @@ button{font:inherit;color:inherit;border:none;background:none;cursor:pointer}
 </div>
 
 <div class="card glass" id="card">
+  <button class="grab" id="grab" aria-label="Expand or collapse"></button>
   <div class="card-head">
     <span class="label">Pin location</span>
     <span class="chip" id="accChip">GPS ± —</span>
@@ -326,9 +349,11 @@ const map = new maplibregl.Map({
 });
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
 
-new ResizeObserver(() => {
-  document.documentElement.style.setProperty('--card-h', ($('card').offsetHeight + 10) + 'px');
-}).observe($('card'));
+function syncCardH() {
+  const c = $('card');
+  document.documentElement.style.setProperty('--card-h', (c.classList.contains('mini') ? 40 : c.offsetHeight + 10) + 'px');
+}
+new ResizeObserver(syncCardH).observe($('card'));
 
 /* ───────── Toast ───────── */
 let toastT;
@@ -772,6 +797,28 @@ document.querySelectorAll('.copy').forEach(btn => btn.addEventListener('click', 
     setTimeout(() => btn.classList.remove('done'), 1600);
   }).catch(() => toast('Copy failed'));
 }));
+
+const cardEl = $('card');
+let level = 0, dragY = null, swiped = false;
+function setLevel(n) {
+  level = Math.max(0, Math.min(2, n));
+  cardEl.classList.toggle('collapsed', level >= 1);
+  cardEl.classList.toggle('mini', level === 2);
+  syncCardH();
+}
+if (matchMedia('(max-width:640px)').matches) setLevel(1);
+$('grab').onclick = () => {
+  if (swiped) { swiped = false; return; }
+  setLevel(level === 2 ? 1 : level === 1 ? 0 : 1);
+};
+$('grab').addEventListener('touchstart', e => { dragY = e.touches[0].clientY; swiped = false; }, { passive: true });
+$('grab').addEventListener('touchend', e => {
+  if (dragY == null) return;
+  const dy = e.changedTouches[0].clientY - dragY;
+  if (dy > 25) { setLevel(level + 1); swiped = true; }
+  else if (dy < -25) { setLevel(level - 1); swiped = true; }
+  dragY = null;
+});
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') setSettings(false);
